@@ -2,17 +2,17 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <title>Plane Rectangular Direct AR Viewer</title>
+  <title>AR Debug Viewer</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
   <script src="https://aframe.io/releases/1.3.0/aframe.min.js"></script>
-  <script src="https://raw.githack.com/AR-js-org/AR.js/master/aframe/build/aframe-ar.js"></script>
+  <script type='text/javascript' src='https://raw.githack.com/AR-js-org/AR.js/master/aframe/build/aframe-ar-nft.js'></script>
   <style>
     body { margin: 0; overflow: hidden; font-family: sans-serif; }
-    #info-panel {
+    #debug-panel {
       position: fixed; top: 10px; left: 10px; right: 10px;
-      background: rgba(0,0,0,0.85); color: white; padding: 12px;
-      border-radius: 8px; font-size: 13px; z-index: 9999; pointer-events: none;
-      line-height: 1.4; text-align: center;
+      background: rgba(0,0,0,0.85); color: #00ffcc; padding: 12px;
+      border-radius: 8px; font-size: 12px; z-index: 9999; pointer-events: none;
+      line-height: 1.5; font-family: monospace;
     }
     #control-panel {
       position: fixed; bottom: 15px; left: 50%; transform: translateX(-50%);
@@ -26,76 +26,85 @@
       pointer-events: auto;
     }
     .ctrl-btn:active { background: #004080; }
-    .label-cell { font-size: 10px; color: #333; text-align: center; grid-column: span 3; margin-top: 4px; }
   </style>
 </head>
 <body style="margin: 0; overflow: hidden;">
 
-  <div id="info-panel">
-    <b>【平面直角座標 直結AR（第3系）】</b><br>
-    <span id="status-text">モデルを配置中...</span>
+  <!-- デバッグ情報を画面に常時表示 -->
+  <div id="debug-panel">
+    <b>【ARデバッグ画面】</b><br>
+    <span id="txt-gps">スマホGPS: 取得中...</span><br>
+    <span id="txt-target">目標座標: 計算中...</span><br>
+    <span id="txt-status">状態: 待機中</span>
   </div>
 
-  <!-- 微調整用コントロールパネル -->
+  <!-- 微調整パネル -->
   <div id="control-panel">
     <button class="ctrl-btn" onclick="adjustPosition(0, 0, -1)">前進</button>
-    <button class="ctrl-btn" onclick="adjustPosition(0, 1, 0)">上 (+)</button>
+    <button class="ctrl-btn" onclick="adjustPosition(0, 1, 0)">上</button>
     <button class="ctrl-btn" onclick="adjustPosition(0, 0, 1)">後退</button>
     <button class="ctrl-btn" onclick="adjustPosition(-1, 0, 0)">左</button>
-    <button class="ctrl-btn" onclick="adjustRotation(15)">回転 (+)</button>
+    <button class="ctrl-btn" onclick="adjustRotation(15)">回転</button>
     <button class="ctrl-btn" onclick="adjustPosition(1, 0, 0)">右</button>
-    <button class="ctrl-btn" onclick="resetModel()">位置リセット</button>
-    <button class="ctrl-btn" onclick="adjustPosition(0, -1, 0)">下 (-)</button>
-    <button class="ctrl-btn" onclick="adjustRotation(-15)">回転 (-)</button>
-    <div class="label-cell">※ボタンで位置・向きの微調整が可能</div>
+    <button class="ctrl-btn" onclick="resetModel()">リセット</button>
+    <button class="ctrl-btn" onclick="adjustPosition(0, -1, 0)">下</button>
+    <button class="ctrl-btn" onclick="adjustRotation(-15)">反転</button>
   </div>
 
-  <a-scene embedded arjs="sourceType: webcam; debugUIEnabled: false;">
-    
-    <!-- 
-      平面直角座標のX, Yの数値をそのままA-Frameの空間座標にマッピング
-      A-Frameの軸: X=左右(東+,西-), Y=上下(高低差), Z=前後(北+,南-)
-    -->
+  <a-scene
+    vr-mode-ui="enabled: false"
+    embedded
+    arjs="sourceType: webcam; debugUIEnabled: false; gpsCameraMinDistance: 1;">
+
     <a-entity
       id="ar-model"
       scale="1 1 1"
       rotation="0 0 0"
-      position="0 0 -3">
+      position="0 0 0">
       <a-gltf-model src="./model.glb" animation-mixer></a-gltf-model>
     </a-entity>
 
-    <a-camera-static />
+    <a-camera gps-new-camera="gpsMinAccuracy: 50"></a-camera>
   </a-scene>
 
   <script>
-    // ─── 【ここに配置したい平面直角座標の数値を入力】 ───
-    // ※測量の世界と3D空間の軸合わせ：
-    //   測量 X (南北) -> ARの Z 軸方向（北がプラス、南がマイナス）
-    //   測量 Y (東西) -> ARの X 軸方向（東がプラス、西がマイナス）
-    const SURVEY_COORDS = {
-      x: -30000.0, // 例: 南北方向の数値（マイナス）
-      y: -27565.661  // 例: 東西方向の数値（マイナス）
+    // ─── 入力する座標（近くのテスト値、または実際の座標） ───
+    const SURVEY_INPUT = {
+      zone: 3,
+      targetX: -208578.176,
+      targetY: -27565.661
     };
 
-    window.addEventListener('DOMContentLoaded', () => {
-      const modelEl = document.getElementById('ar-model');
+    const ZONE_3_ORIGIN = { lat: 36.0, lon: 132.16666666666666 };
 
-      // 測量座標をAR空間のメートルに割り当て
-      // （※数値が大きすぎる場合は、基準点からの「差分（相対距離）」に置き換えると目の前に表示しやすくなります）
-      // ここでは例として、YをX軸に、XをZ軸に割り当てています
-      const posX = SURVEY_COORDS.y / 1000; // 例としてスケール調整が必要な場合の割算（必要に応じて変更）
-      const posZ = SURVEY_COORDS.x / 1000;
+    function convertZone3ToLatLng(x, y) {
+      const dLat = x / 111000.0;
+      const dLng = y / (111000.0 * Math.cos(ZONE_3_ORIGIN.lat * Math.PI / 180.0));
+      return {
+        latitude: ZONE_3_ORIGIN.lat + dLat,
+        longitude: ZONE_3_ORIGIN.lon + dLng
+      };
+    }
 
-      // 初回は目の前（Z=-3m付近）を基準にしつつ、座標データを反映
-      modelEl.setAttribute('position', { x: 0, y: 0, z: -3 });
+    const targetLatLng = convertZone3ToLatLng(SURVEY_INPUT.targetX, SURVEY_INPUT.targetY);
+    document.getElementById('txt-target').innerText = `目標: 緯度 ${targetLatLng.latitude.toFixed(5)}, 経度 ${targetLatLng.longitude.toFixed(5)}`;
 
-      document.getElementById('status-text').innerHTML = `
-        座標設定完了 (X:${SURVEY_COORDS.x}, Y:${SURVEY_COORDS.y})<br>ボタンで位置を微調整してください。
-      `;
+    const modelEl = document.getElementById('ar-model');
+    modelEl.setAttribute('gps-new-entity-place', {
+      latitude: targetLatLng.latitude,
+      longitude: targetLatLng.longitude
     });
 
-    // 微調整用スクリプト
-    const modelEl = document.getElementById('ar-model');
+    // スマホのGPS位置を監視して画面に表示
+    const cameraEl = document.querySelector('a-camera');
+    cameraEl.addEventListener('gps-camera-update-position', e => {
+      const curLat = e.detail.position.latitude;
+      const curLng = e.detail.position.longitude;
+      document.getElementById('txt-gps').innerText = `現在地: 緯度 ${curLat.toFixed(5)}, 経度 ${curLng.toFixed(5)}`;
+      document.getElementById('txt-status').innerText = `状態: GPS連動中（モデル配置済み）`;
+    });
+
+    // 微調整
     function adjustPosition(dx, dy, dz) {
       const pos = modelEl.getAttribute('position');
       modelEl.setAttribute('position', { x: pos.x + dx, y: pos.y + dy, z: pos.z + dz });
@@ -105,7 +114,7 @@
       modelEl.setAttribute('rotation', { x: rot.x, y: rot.y + ddeg, z: rot.z });
     }
     function resetModel() {
-      modelEl.setAttribute('position', {x: 0, y: 0, z: -3});
+      modelEl.setAttribute('position', {x: 0, y: 0, z: 0});
       modelEl.setAttribute('rotation', {x: 0, y: 0, z: 0});
     }
   </script>

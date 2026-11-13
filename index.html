@@ -2,10 +2,10 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <title>Outdoor Zone 3 GPS Monitor</title>
+  <title>Direct GPS Zone 3 AR</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
   <script src="https://aframe.io/releases/1.3.0/aframe.min.js"></script>
-  <script type='text/javascript' src='https://raw.githack.com/AR-js-org/AR.js/master/aframe/build/aframe-ar-nft.js'></script>
+  <script src="https://raw.githack.com/AR-js-org/AR.js/master/aframe/build/aframe-ar.js"></script>
   <style>
     body { margin: 0; overflow: hidden; font-family: sans-serif; }
     #debug-panel {
@@ -30,15 +30,15 @@
 </head>
 <body style="margin: 0; overflow: hidden;">
 
-  <!-- 画面上のデバッグパネル：GPSの状態がリアルタイムで文字に出ます -->
+  <!-- デバッグパネル -->
   <div id="debug-panel">
-    <b>【GPS & 第3系 監視モニター】</b><br>
-    <span id="txt-gps">スマホ現在地: 📡 GPS電波を待っています...</span><br>
-    <span id="txt-target">目標座標(第3系): 計算中...</span><br>
-    <span id="txt-status">状態: カメラ起動中</span>
+    <b>【GPS直接取得モニター】</b><br>
+    <span id="txt-gps">GPS取得中... (屋外に出て下さい)</span><br>
+    <span id="txt-target">目標(第3系): 計算完了</span><br>
+    <span id="txt-status">状態: 待機中</span>
   </div>
 
-  <!-- 微調整用パネル -->
+  <!-- 微調整パネル -->
   <div id="control-panel">
     <button class="ctrl-btn" onclick="adjustPosition(0, 0, -0.5)">前進</button>
     <button class="ctrl-btn" onclick="adjustPosition(0, 0.5, 0)">上</button>
@@ -51,21 +51,18 @@
     <button class="ctrl-btn" onclick="adjustRotation(-15)">反転</button>
   </div>
 
-  <a-scene
-    vr-mode-ui="enabled: false"
-    embedded
-    arjs="sourceType: webcam; debugUIEnabled: false;">
-
+  <a-scene embedded arjs="sourceType: webcam; debugUIEnabled: false;">
+    
+    <!-- モデル配置用エンティティ -->
     <a-entity
       id="ar-model"
       scale="1 1 1"
       rotation="0 0 0"
-      position="0 0 0">
+      position="0 0 -3">
       <a-gltf-model src="./model.glb" animation-mixer></a-gltf-model>
     </a-entity>
 
-    <!-- GPSカメラ（精度制限なしで素早くキャッチ） -->
-    <a-camera gps-new-camera="gpsMinAccuracy: 1000"></a-camera>
+    <a-camera-static />
   </a-scene>
 
   <script>
@@ -87,33 +84,34 @@
       };
     }
 
-    // 目標座標を計算して画面に表示
     const targetLatLng = convertZone3ToLatLng(SURVEY_INPUT.targetX, SURVEY_INPUT.targetY);
     document.getElementById('txt-target').innerText = 
       `目標(第3系): 緯度${targetLatLng.latitude.toFixed(5)}, 経度${targetLatLng.longitude.toFixed(5)}`;
 
+    // JS標準機能で強制的にGPSを取得する
+    if ("geolocation" in navigator) {
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          const curLat = position.coords.latitude;
+          const curLng = position.coords.longitude;
+          const accuracy = position.coords.accuracy;
+
+          document.getElementById('txt-gps').innerHTML = 
+            `スマホ現在地: 緯度${curLat.toFixed(5)}, 経度${curLng.toFixed(5)} <br>(精度: 約${Math.round(accuracy)}m)`;
+          document.getElementById('txt-status').innerText = `状態: GPS取得成功！モデルを表示中`;
+        },
+        (error) => {
+          document.getElementById('txt-gps').innerText = `GPS取得エラー: ${error.message}`;
+          document.getElementById('txt-status').innerText = `状態: 位置情報を許可してください`;
+        },
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+      );
+    } else {
+      document.getElementById('txt-gps').innerText = `このブラウザはGPS未対応です`;
+    }
+
+    // 微調整用
     const modelEl = document.getElementById('ar-model');
-
-    // 初期配置
-    modelEl.setAttribute('gps-new-entity-place', {
-      latitude: targetLatLng.latitude,
-      longitude: targetLatLng.longitude
-    });
-
-    // スマホのGPS位置が更新された瞬間にイベントが発火し、画面の数字が切り替わる
-    const cameraEl = document.querySelector('a-camera');
-    cameraEl.addEventListener('gps-camera-update-position', e => {
-      const curLat = e.detail.position.latitude;
-      const curLng = e.detail.position.longitude;
-      const accuracy = e.detail.position.accuracy;
-
-      document.getElementById('txt-gps').innerHTML = 
-        `スマホ現在地: 緯度${curLat.toFixed(5)}, 経度${curLng.toFixed(5)} <br><span style="color:yellow;">(精度誤差: 約${Math.round(accuracy)}m)</span>`;
-      
-      document.getElementById('txt-status').innerText = `状態: GPS電波を正常に受信中`;
-    });
-
-    // 微調整
     function adjustPosition(dx, dy, dz) {
       const pos = modelEl.getAttribute('position');
       modelEl.setAttribute('position', { x: pos.x + dx, y: pos.y + dy, z: pos.z + dz });
@@ -123,7 +121,7 @@
       modelEl.setAttribute('rotation', { x: rot.x, y: rot.y + ddeg, z: rot.z });
     }
     function resetModel() {
-      modelEl.setAttribute('position', {x: 0, y: 0, z: 0});
+      modelEl.setAttribute('position', {x: 0, y: 0, z: -3});
       modelEl.setAttribute('rotation', {x: 0, y: 0, z: 0});
     }
   </script>

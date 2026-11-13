@@ -2,17 +2,17 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <title>Outdoor Zone 3 AR Viewer (Fast Mode)</title>
+  <title>Outdoor Zone 3 GPS Monitor</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
   <script src="https://aframe.io/releases/1.3.0/aframe.min.js"></script>
   <script type='text/javascript' src='https://raw.githack.com/AR-js-org/AR.js/master/aframe/build/aframe-ar-nft.js'></script>
   <style>
     body { margin: 0; overflow: hidden; font-family: sans-serif; }
-    #info-panel {
+    #debug-panel {
       position: fixed; top: 10px; left: 10px; right: 10px;
-      background: rgba(0,0,0,0.8); color: white; padding: 12px;
-      border-radius: 8px; font-size: 13px; z-index: 9999; pointer-events: none;
-      line-height: 1.4; text-align: center;
+      background: rgba(0,0,0,0.85); color: #00ffcc; padding: 12px;
+      border-radius: 8px; font-size: 12px; z-index: 9999; pointer-events: none;
+      line-height: 1.5; font-family: monospace;
     }
     #control-panel {
       position: fixed; bottom: 15px; left: 50%; transform: translateX(-50%);
@@ -26,28 +26,29 @@
       pointer-events: auto;
     }
     .ctrl-btn:active { background: #004080; }
-    .label-cell { font-size: 10px; color: #333; text-align: center; grid-column: span 3; margin-top: 4px; }
   </style>
 </head>
 <body style="margin: 0; overflow: hidden;">
 
-  <div id="info-panel">
-    <b>【屋外・第3系 AR（即座配置版）】</b><br>
-    <span id="status-text">座標を計算・配置中...</span>
+  <!-- 画面上のデバッグパネル：GPSの状態がリアルタイムで文字に出ます -->
+  <div id="debug-panel">
+    <b>【GPS & 第3系 監視モニター】</b><br>
+    <span id="txt-gps">スマホ現在地: 📡 GPS電波を待っています...</span><br>
+    <span id="txt-target">目標座標(第3系): 計算中...</span><br>
+    <span id="txt-status">状態: カメラ起動中</span>
   </div>
 
-  <!-- 微調整用コントロールパネル -->
+  <!-- 微調整用パネル -->
   <div id="control-panel">
     <button class="ctrl-btn" onclick="adjustPosition(0, 0, -0.5)">前進</button>
-    <button class="ctrl-btn" onclick="adjustPosition(0, 0.5, 0)">標高+ (上)</button>
+    <button class="ctrl-btn" onclick="adjustPosition(0, 0.5, 0)">上</button>
     <button class="ctrl-btn" onclick="adjustPosition(0, 0, 0.5)">後退</button>
-    <button class="ctrl-btn" onclick="adjustPosition(-0.5, 0, 0)">左移動</button>
-    <button class="ctrl-btn" onclick="adjustRotation(15)">回転 (+)</button>
-    <button class="ctrl-btn" onclick="adjustPosition(0.5, 0, 0)">右移動</button>
-    <button class="ctrl-btn" onclick="resetModel()">位置リセット</button>
-    <button class="ctrl-btn" onclick="adjustPosition(0, -0.5, 0)">標高- (下)</button>
-    <button class="ctrl-btn" onclick="adjustRotation(-15)">回転 (-)</button>
-    <div class="label-cell">※位置や向きの微調整に利用</div>
+    <button class="ctrl-btn" onclick="adjustPosition(-0.5, 0, 0)">左</button>
+    <button class="ctrl-btn" onclick="adjustRotation(15)">回転</button>
+    <button class="ctrl-btn" onclick="adjustPosition(0.5, 0, 0)">右</button>
+    <button class="ctrl-btn" onclick="resetModel()">リセット</button>
+    <button class="ctrl-btn" onclick="adjustPosition(0, -0.5, 0)">下</button>
+    <button class="ctrl-btn" onclick="adjustRotation(-15)">反転</button>
   </div>
 
   <a-scene
@@ -63,51 +64,56 @@
       <a-gltf-model src="./model.glb" animation-mixer></a-gltf-model>
     </a-entity>
 
-    <!-- 精度制限を緩和し、すぐにカメラが起動するように設定 -->
-    <a-camera gps-new-camera="gpsMinAccuracy: 500"></a-camera>
+    <!-- GPSカメラ（精度制限なしで素早くキャッチ） -->
+    <a-camera gps-new-camera="gpsMinAccuracy: 1000"></a-camera>
   </a-scene>
 
   <script>
-    // ─── 【ここにメモにある実際の平面直角座標を入力】 ───
+    // ─── 【ここに実際の第3系座標を入力】 ───
     const SURVEY_INPUT = {
-      zone: 3,                 // 第3系 (山口県など)
-      targetX: -208578.176,       // X座標（マイナス値）
-      targetY: -27565.661      // Y座標（マイナス値）
+      zone: 3,
+      targetX: -208578.176,
+      targetY: -27565.661
     };
 
-    // 第3系の原点定義（北緯36°00′00″, 東経132°10′00″）
-    const ZONE_3_ORIGIN = {
-      lat: 36.0,
-      lon: 132.16666666666666
-    };
+    const ZONE_3_ORIGIN = { lat: 36.0, lon: 132.16666666666666 };
 
     function convertZone3ToLatLng(x, y) {
       const dLat = x / 111000.0;
       const dLng = y / (111000.0 * Math.cos(ZONE_3_ORIGIN.lat * Math.PI / 180.0));
-
       return {
         latitude: ZONE_3_ORIGIN.lat + dLat,
         longitude: ZONE_3_ORIGIN.lon + dLng
       };
     }
 
-    // 読み込みと同時に、GPSの待ち時間を挟まず強制的に目標座標をセット
-    window.addEventListener('DOMContentLoaded', () => {
-      const latLng = convertZone3ToLatLng(SURVEY_INPUT.targetX, SURVEY_INPUT.targetY);
-      const modelEl = document.getElementById('ar-model');
+    // 目標座標を計算して画面に表示
+    const targetLatLng = convertZone3ToLatLng(SURVEY_INPUT.targetX, SURVEY_INPUT.targetY);
+    document.getElementById('txt-target').innerText = 
+      `目標(第3系): 緯度${targetLatLng.latitude.toFixed(5)}, 経度${targetLatLng.longitude.toFixed(5)}`;
 
-      modelEl.setAttribute('gps-new-entity-place', {
-        latitude: latLng.latitude,
-        longitude: latLng.longitude
-      });
+    const modelEl = document.getElementById('ar-model');
 
-      document.getElementById('status-text').innerHTML = `
-        第3系座標の配置完了。<br>カメラ映像を確認してください。
-      `;
+    // 初期配置
+    modelEl.setAttribute('gps-new-entity-place', {
+      latitude: targetLatLng.latitude,
+      longitude: targetLatLng.longitude
     });
 
-    // 微調整用スクリプト
-    const modelEl = document.getElementById('ar-model');
+    // スマホのGPS位置が更新された瞬間にイベントが発火し、画面の数字が切り替わる
+    const cameraEl = document.querySelector('a-camera');
+    cameraEl.addEventListener('gps-camera-update-position', e => {
+      const curLat = e.detail.position.latitude;
+      const curLng = e.detail.position.longitude;
+      const accuracy = e.detail.position.accuracy;
+
+      document.getElementById('txt-gps').innerHTML = 
+        `スマホ現在地: 緯度${curLat.toFixed(5)}, 経度${curLng.toFixed(5)} <br><span style="color:yellow;">(精度誤差: 約${Math.round(accuracy)}m)</span>`;
+      
+      document.getElementById('txt-status').innerText = `状態: GPS電波を正常に受信中`;
+    });
+
+    // 微調整
     function adjustPosition(dx, dy, dz) {
       const pos = modelEl.getAttribute('position');
       modelEl.setAttribute('position', { x: pos.x + dx, y: pos.y + dy, z: pos.z + dz });

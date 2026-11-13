@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>TREND-CORE WebAR Viewer</title>
+  <style>
+    body { margin: 0; overflow: hidden; font-family: sans-serif; }
+    #info {
+      position: fixed; top: 15px; left: 15px; right: 15px;
+      background: rgba(0, 0, 0, 0.7); color: #fff; padding: 12px;
+      border-radius: 8px; font-size: 13px; z-index: 100; pointer-events: none;
+      line-height: 1.5;
+    }
+  </style>
+  <!-- Three.js の読み込み -->
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <div id="info">
+    <b>【WebAR 3Dモデル表示】</b><br>
+    「ARを起動」ボタンを押し、カメラで床や地面を映して緑のリングが出たらタップしてください。
+  </div>
+
+  <script type="module">
+    import * as THREE from 'three';
+    import { ARButton } from 'three/addons/webxr/ARButton.js';
+    import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+    let camera, scene, renderer;
+    let reticle;
+    let hitTestSource = null;
+    let hitTestSourceRequested = false;
+    let loadedModel = null;
+    let modelPlaced = false;
+
+    // ─── 【重要】TREND-COREの基準点オフセット設定 ───
+    // Blenderで絶対座標のまま出力した際、モデルが遠くにある場合に引き算する数値です。
+    // 必要に応じて数値を書き換えてください。
+    const SURVEY_OFFSET = {
+      x: -32444,  // 例: X座標のオフセット
+      y: -215002,  // 例: 高さ（標高）のオフセット
+      z: 0.0   // 例: Y座標のオフセット
+    };
+
+    init();
+    animate();
+
+    function init() {
+      scene = new THREE.Scene();
+      camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 500);
+
+      // 照명（屋外でも見やすいように環境光と平行光を設定）
+      const hemiLight = new THREE.HemisphereLight(0xffffff, 0xbbbbff, 1.2);
+      scene.add(hemiLight);
+      const dirLight = new THREE.DirectionalLight(0xffffff, 1.5);
+      dirLight.position.set(10, 20, 10);
+      scene.add(dirLight);
+
+      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+      renderer.setPixelRatio(window.devicePixelRatio);
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.xr.enabled = true;
+      document.body.appendChild(renderer.domElement);
+
+      // AR起動ボタンの生成
+      const arButton = ARButton.createButton(renderer, { requiredFeatures: ['hit-test'] });
+      document.body.appendChild(arButton);
+
+      // 地面検出用のターゲットリング（緑の円）
+      reticle = new THREE.Mesh(
+        new THREE.RingGeometry(0.15, 0.2, 32).rotateX(-Math.PI / 2),
+        new THREE.MeshBasicMaterial({ color: 0x00ff00 })
+      );
+      reticle.matrixAutoUpdate = false;
+      reticle.visible = false;
+      scene.add(reticle);
+
+      // ─── GLBモデルの読み込み ───
+      // ※ ここを変更すると、ご自身のGLBファイル名に合わせられます（例: "model.glb"）
+      const loader = new GLTFLoader();
+      loader.load('./model.glb', (gltf) => {
+        loadedModel = gltf.scene;
+
+        // 実座標からオフセット（基準点）を引き算して原点付近に配置
+        loadedModel.position.x -= SURVEY_OFFSET.x;
+        loadedModel.position.y -= SURVEY_OFFSET.y;
+        loadedModel.position.z -= SURVEY_OFFSET.z;
+
+        loadedModel.visible = false; // タップして配置するまでは非表示
+        scene.add(loadedModel);
+        console.log('GLBのロードが完了しました');
+      }, undefined, (error) => {
+        console.error('GLBの読み込みに失敗しました:', error);
+      });
+
+      // 画面をタップしたときの処理
+      const controller = renderer.xr.getController(0);
+      controller.addEventListener('select', () => {
+        if (reticle.visible && loadedModel && !modelPlaced) {
+          // レティクル（地面の位置）にモデルを配置
+          loadedModel.position.setFromMatrixPosition(reticle.matrix);
+          loadedModel.visible = true;
+          modelPlaced = true;
+          reticle.visible = false;
+          
+          document.getElementById('info').innerHTML = '<b>モデルを配置しました！</b>';
+        }
+      });
+      scene.add(controller);
+
+      window.addEventListener('resize', onWindowResize);
+    }
+
+    function onWindowResize() {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    }
+
+    function animate() {
+      renderer.setAnimationLoop(render);
+    }
+
+    function render(timestamp, frame) {
+      if (frame) {
+        const referenceSpace = renderer.xr.getReferenceSpace();
+        const session = renderer.xr.getSession();
+
+        if (hitTestSourceRequested === false) {
+          session.requestReferenceSpace('viewer').then((viewerSpace) => {
+            session.requestHitTestSource({ space: viewerSpace }).then((source) => {
+              hitTestSource = source;
+            });
+          });
+          session.addEventListener('end', () => {
+            hitTestSourceRequested = false;
+            hitTestSource = null;
+          });
+          hitTestSourceRequested = true;
+        }
+
+        if (hitTestSource && !modelPlaced) {
+          const hitTestResults = frame.getHitTestResults(hitTestSource);
+          if (hitTestResults.length > 0) {
+            const hit = hitTestResults[0];
+            reticle.visible = true;
+            reticle.matrix.fromArray(hit.getPose(referenceSpace).transform.matrix);
+          } else {
+            reticle.visible = false;
+          }
+        }
+      }
+      renderer.render(scene, camera);
+    }
+  </script>
+</body>
+</html>
